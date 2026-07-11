@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"log"
+	"net/http"
 	"os"
 	"strings"
 
@@ -43,6 +44,12 @@ func main() {
 	eleven := ai.NewElevenLabsClient(elevenKey, voiceID)
 	store := rivalry.NewStore()
 	stages := make(map[int64]stage)
+
+	// Render's free tier only offers Web Services (not Background Workers),
+	// which require something listening on a port. This tiny HTTP server
+	// exists purely to satisfy that requirement — the actual bot logic is
+	// the polling loop below, running concurrently in the same process.
+	go startKeepAliveServer()
 
 	log.Println("World Cup Rivalry Bot starting (long polling)...")
 
@@ -155,6 +162,23 @@ func handleMessage(
 func send(tg *telegram.Client, chatID int64, text string) {
 	if err := tg.SendMessage(chatID, text); err != nil {
 		log.Printf("sendMessage error: %v", err)
+	}
+}
+
+func startKeepAliveServer() {
+	port := os.Getenv("PORT")
+	if port == "" {
+		port = "8080" // fallback for local runs; Render sets PORT automatically
+	}
+
+	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte("World Cup Rivalry Bot is running."))
+	})
+
+	log.Printf("keep-alive HTTP server listening on port %s", port)
+	if err := http.ListenAndServe(":"+port, nil); err != nil {
+		log.Printf("keep-alive server error: %v", err)
 	}
 }
 
