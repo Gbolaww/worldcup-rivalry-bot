@@ -86,3 +86,55 @@ func (c *GeminiClient) GenerateHypeLine(team, rival string) (string, error) {
 
 	return gr.Candidates[0].Content.Parts[0].Text, nil
 }
+
+// GenerateComebackLine asks Gemini for a short imagined clapback from the
+// rival's fans, responding to the hype line that was just sent after the
+// user's team scored against them. Same request/response plumbing as
+// GenerateHypeLine, just a different prompt.
+func (c *GeminiClient) GenerateComebackLine(team, rival, hypeLine string) (string, error) {
+	prompt := fmt.Sprintf(
+		"You're a hype-man commentator for a World Cup fan base. %s just scored against %s, and %s fans "+
+			"just heard this trash talk: \"%s\". Write ONE short, punchy, playful imagined clapback (max 20 words) "+
+			"from %s fans — defiant and confident despite conceding the goal. Keep it fun and lighthearted, not "+
+			"genuinely mean or offensive. Return ONLY the line, no quotes, no extra text.",
+		team, rival, rival, hypeLine, rival,
+	)
+
+	reqBody := geminiRequest{
+		Contents: []geminiContent{
+			{Parts: []geminiPart{{Text: prompt}}},
+		},
+	}
+
+	b, err := json.Marshal(reqBody)
+	if err != nil {
+		return "", fmt.Errorf("marshal gemini request: %w", err)
+	}
+
+	url := fmt.Sprintf("%s?key=%s", geminiEndpoint, c.APIKey)
+	resp, err := c.http.Post(url, "application/json", bytes.NewReader(b))
+	if err != nil {
+		return "", fmt.Errorf("gemini request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	respBytes, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return "", fmt.Errorf("read gemini response: %w", err)
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("gemini returned status %d: %s", resp.StatusCode, string(respBytes))
+	}
+
+	var gr geminiResponse
+	if err := json.Unmarshal(respBytes, &gr); err != nil {
+		return "", fmt.Errorf("unmarshal gemini response: %w", err)
+	}
+
+	if len(gr.Candidates) == 0 || len(gr.Candidates[0].Content.Parts) == 0 {
+		return "", fmt.Errorf("gemini returned no candidates")
+	}
+
+	return gr.Candidates[0].Content.Parts[0].Text, nil
+}

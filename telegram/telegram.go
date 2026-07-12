@@ -31,7 +31,10 @@ type Update struct {
 	UpdateID int `json:"update_id"`
 	Message  *struct {
 		MessageID int `json:"message_id"`
-		Chat      struct {
+		From      *struct {
+			ID int64 `json:"id"`
+		} `json:"from"`
+		Chat struct {
 			ID   int64  `json:"id"`
 			Type string `json:"type"` // "private", "group", "supergroup", "channel"
 		} `json:"chat"`

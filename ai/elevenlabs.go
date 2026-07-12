@@ -11,13 +11,12 @@ import (
 const elevenLabsEndpoint = "https://api.elevenlabs.io/v1/text-to-speech/%s"
 
 type ElevenLabsClient struct {
-	APIKey  string
-	VoiceID string
-	http    *http.Client
+	APIKey string
+	http   *http.Client
 }
 
-func NewElevenLabsClient(apiKey, voiceID string) *ElevenLabsClient {
-	return &ElevenLabsClient{APIKey: apiKey, VoiceID: voiceID, http: &http.Client{}}
+func NewElevenLabsClient(apiKey string) *ElevenLabsClient {
+	return &ElevenLabsClient{APIKey: apiKey, http: &http.Client{}}
 }
 
 type ttsRequest struct {
@@ -31,8 +30,11 @@ type voiceSettings struct {
 	SimilarityBoost float64 `json:"similarity_boost"`
 }
 
-// GenerateSpeech converts text to speech and returns the raw MP3 audio bytes.
-func (c *ElevenLabsClient) GenerateSpeech(text string) ([]byte, error) {
+// GenerateSpeech converts text to speech using the given ElevenLabs voice ID
+// and returns the raw MP3 audio bytes. Voice ID is now passed per call
+// (rather than fixed on the client) so different "characters" — e.g. a
+// team's fans vs. their rival's fans — can sound distinct.
+func (c *ElevenLabsClient) GenerateSpeech(text, voiceID string) ([]byte, error) {
 	reqBody := ttsRequest{
 		Text:    text,
 		ModelID: "eleven_flash_v2_5",
@@ -47,7 +49,7 @@ func (c *ElevenLabsClient) GenerateSpeech(text string) ([]byte, error) {
 		return nil, fmt.Errorf("marshal elevenlabs request: %w", err)
 	}
 
-	url := fmt.Sprintf(elevenLabsEndpoint, c.VoiceID)
+	url := fmt.Sprintf(elevenLabsEndpoint, voiceID)
 	req, err := http.NewRequest(http.MethodPost, url, bytes.NewReader(b))
 	if err != nil {
 		return nil, fmt.Errorf("build elevenlabs request: %w", err)
