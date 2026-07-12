@@ -29,8 +29,7 @@ const (
 )
 
 // App bundles all the shared clients and in-memory state the bot needs, and
-// hangs the message-handling logic off it as methods. This avoids threading
-// half a dozen parameters through every function as the feature set grows.
+// hangs the message-handling logic off it as methods.
 type App struct {
 	tg     *telegram.Client
 	gemini *ai.GeminiClient
@@ -68,9 +67,6 @@ func main() {
 	geminiKey := mustEnv("GEMINI_API_KEY")
 	elevenKey := mustEnv("ELEVENLABS_API_KEY")
 
-	// Team voice falls back to the old ELEVENLABS_VOICE_ID var (for anyone
-	// upgrading from before rival voices existed), then to ElevenLabs'
-	// default "Rachel" preset.
 	teamVoiceID := os.Getenv("ELEVENLABS_TEAM_VOICE_ID")
 	if teamVoiceID == "" {
 		teamVoiceID = os.Getenv("ELEVENLABS_VOICE_ID")
@@ -81,7 +77,7 @@ func main() {
 
 	rivalVoiceID := os.Getenv("ELEVENLABS_RIVAL_VOICE_ID")
 	if rivalVoiceID == "" {
-		rivalVoiceID = "pNInz6attGhOFRcW1ivM" // "Adam" — deliberately different from the team default
+		rivalVoiceID = "pNInz6attGhOFRcW1ivM" // "Adam" — deliberately different from team default
 	}
 
 	app := &App{
@@ -130,12 +126,6 @@ func main() {
 				log.Printf("update %d has no message, skipping", u.UpdateID)
 				continue
 			}
-			if u.Message.From == nil {
-				// Channel posts and a few other update types have no sender.
-				// We only support DM/group chats from real users.
-				log.Printf("update %d has no sender, skipping", u.UpdateID)
-				continue
-			}
 
 			chatID := u.Message.Chat.ID
 			chatType := u.Message.Chat.Type
@@ -157,7 +147,7 @@ func (a *App) handleMessage(userID, chatID int64, chatType, text string) {
 	lower := strings.ToLower(text)
 	groupNote := ""
 	if chatType == "group" || chatType == "supergroup" {
-		groupNote = " Everyone in this group can set their own team — just DM me or use /team here."
+		groupNote = " Everyone in this group can set their own team — just use /team here."
 	}
 
 	switch {
@@ -188,7 +178,7 @@ func (a *App) handleMessage(userID, chatID int64, chatType, text string) {
 			a.send(chatID, fmt.Sprintf("Rival set to %s. Now set your team with /team <name>.", strings.Title(strings.ToLower(rival))))
 			return
 		}
-		a.send(chatID, fmt.Sprintf("Locked in: %s vs %s 🔥\n\nSend /goal when your team scores, or /rivalgoal when %s scores on you.", u.Team, u.Rival, u.Rival))
+		a.send(chatID, fmt.Sprintf("Locked in: %s vs %s 🔥\n\nRun /autohype to start watching real World Cup results, then /simulate or /simulaterival to see it fire right now.", u.Team, u.Rival))
 		return
 
 	case lower == "/status":
@@ -198,14 +188,6 @@ func (a *App) handleMessage(userID, chatID int64, chatType, text string) {
 			return
 		}
 		a.send(chatID, fmt.Sprintf("Team: %s\nRival: %s\nGoals celebrated for %s: %d\nGoals conceded to %s: %d", u.Team, u.Rival, u.Team, u.GoalCount, u.Rival, u.RivalGoalCount))
-		return
-
-	case lower == "/goal":
-		a.celebrateGoal(userID, chatID)
-		return
-
-	case lower == "/rivalgoal":
-		a.celebrateRivalGoal(userID, chatID)
 		return
 
 	case lower == "/autohype":
@@ -219,9 +201,8 @@ func (a *App) handleMessage(userID, chatID int64, chatType, text string) {
 		a.testModeUsers[userID] = true
 		a.testModeMu.Unlock()
 
-		// Seed baselines immediately for both team and rival, so we don't
-		// have to wait up to 60s for the poller's first pass before
-		// /simulate or /simulaterival has something to rewind from.
+		// Seed baselines immediately for both team and rival, so /simulate
+		// and /simulaterival always have a real number to compare against.
 		matches, err := a.fb.GetAllMatches()
 		if err == nil {
 			if match := football.LatestScoredMatchForTeam(matches, u.Team); match != nil {
@@ -245,25 +226,27 @@ func (a *App) handleMessage(userID, chatID int64, chatType, text string) {
 
 	case lower == "/simulate":
 		u := a.store.Get(userID)
-		if u.Team == "" {
-			a.send(chatID, "Set your team first with /start, then try /autohype and /simulate.")
+		if u.Team == "" || u.Rival == "" {
+			a.send(chatID, "Set your team and rival first with /start, then try /autohype and /simulate.")
 			return
 		}
 		a.testModeMu.Lock()
 		_, on := a.testModeUsers[userID]
+		a.testModeMu.Unlock()
 		if !on {
-			a.testModeMu.Unlock()
 			a.send(chatID, "Turn on /autohype first, then run /simulate to demo the auto-detection live.")
 			return
 		}
-		// Rewind our last-known goal count by 1, so the next poll cycle sees
-		// an "increase" and fires the real detection path — same code as a
-		// genuine new goal, just triggered on demand for demo purposes.
+		// Fire the celebration immediately — no need to wait on the poll
+		// cycle for a demo. Also nudge the tracked baseline down by one so
+		// the next real poll cycle doesn't immediately re-fire on the same
+		// result.
+		a.testModeMu.Lock()
 		if last, seen := a.lastGoalTotals[userID]; seen && last > 0 {
 			a.lastGoalTotals[userID] = last - 1
 		}
 		a.testModeMu.Unlock()
-		a.send(chatID, "Simulating a new goal for your team... the auto-detection poller will pick it up within 60 seconds. ⏱️")
+		a.celebrateGoal(userID, chatID)
 		return
 
 	case lower == "/simulaterival":
@@ -274,20 +257,21 @@ func (a *App) handleMessage(userID, chatID int64, chatType, text string) {
 		}
 		a.testModeMu.Lock()
 		_, on := a.testModeUsers[userID]
+		a.testModeMu.Unlock()
 		if !on {
-			a.testModeMu.Unlock()
 			a.send(chatID, "Turn on /autohype first, then run /simulaterival to demo the auto-detection live.")
 			return
 		}
+		a.testModeMu.Lock()
 		if last, seen := a.lastRivalGoalTotals[userID]; seen && last > 0 {
 			a.lastRivalGoalTotals[userID] = last - 1
 		}
 		a.testModeMu.Unlock()
-		a.send(chatID, fmt.Sprintf("Simulating a new goal for %s... the auto-detection poller will pick it up within 60 seconds. ⏱️", u.Rival))
+		a.celebrateRivalGoal(userID, chatID)
 		return
 
 	case lower == "/help":
-		a.send(chatID, "/start - get started\n/team <name> - set your team (personal — works in DMs & groups)\n/rival <name> - set your rival\n/goal - trigger a mock goal celebration for your team\n/rivalgoal - trigger a mock goal celebration for your rival scoring on you\n/autohype - auto-hype either side when real goals happen in the World Cup\n/simulate - demo auto-detection for your team scoring\n/simulaterival - demo auto-detection for your rival scoring\n/status - see your current setup")
+		a.send(chatID, "/start - get started\n/team <name> - set your team (personal — works in DMs & groups)\n/rival <name> - set your rival\n/autohype - watch real World Cup results for auto-hype, both sides\n/simulate - see your team's hype celebration right now\n/simulaterival - see your rival's hype celebration right now\n/status - see your current setup")
 		return
 	}
 
@@ -303,8 +287,8 @@ func (a *App) handleMessage(userID, chatID int64, chatType, text string) {
 		a.stages[userID] = stageReady
 		u := a.store.Get(userID)
 		a.send(chatID, fmt.Sprintf(
-			"Locked in: %s vs %s 🔥\n\nSend /goal when your team scores, or /rivalgoal when %s scores on you.",
-			u.Team, u.Rival, u.Rival,
+			"Locked in: %s vs %s 🔥\n\nRun /autohype to start watching real World Cup results, then /simulate or /simulaterival to see it fire right now.",
+			u.Team, u.Rival,
 		))
 
 	default:
@@ -338,11 +322,11 @@ func (a *App) celebrateRivalGoal(userID, chatID int64) {
 	a.celebrateScore(userID, chatID, u.Rival, a.rivalVoiceID, u.Team, a.teamVoiceID, a.store.IncrementRivalGoal)
 }
 
-// celebrateScore is the shared engine behind both /goal and /rivalgoal: it
-// generates a hype line for whichever side just scored (spoken in that
-// side's voice), then a clapback from the other side (spoken in the other
-// side's voice). incrementCount lets the caller bump whichever tally
-// (goals for vs. goals conceded) applies.
+// celebrateScore is the shared engine behind both celebrateGoal and
+// celebrateRivalGoal: it generates a hype line for whichever side just
+// scored (spoken in that side's voice), then a clapback from the other side
+// (spoken in the other side's voice). incrementCount lets the caller bump
+// whichever tally (goals for vs. goals conceded) applies.
 func (a *App) celebrateScore(userID, chatID int64, scorer, scorerVoiceID, opponent, opponentVoiceID string, incrementCount func(int64) int) {
 	line, err := a.gemini.GenerateHypeLine(scorer, opponent)
 	if err != nil {
@@ -393,10 +377,7 @@ func (a *App) celebrateScore(userID, chatID int64, scorer, scorerVoiceID, oppone
 // auto-triggers a celebration whenever either side's latest match shows
 // more total goals than last observed. Celebrations are delivered to the
 // user's LastChatID (wherever they last messaged the bot from), since this
-// poller runs independent of any live message. Polls every 60s — the
-// underlying data isn't second-by-second live, so faster polling wouldn't
-// reveal anything new, and this stays comfortably polite to the free public
-// dataset.
+// poller runs independent of any live message. Polls every 60s.
 func (a *App) startFootballPoller() {
 	for {
 		time.Sleep(60 * time.Second)
