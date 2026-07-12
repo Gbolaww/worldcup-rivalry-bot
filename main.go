@@ -58,7 +58,7 @@ type App struct {
 
 func main() {
 	// Load .env if present. Not an error if it's missing (e.g. in production
-	// on Render, where env vars are set directly in the dashboard instead).
+	// on Railway, where env vars are set directly in the dashboard instead).
 	if err := godotenv.Load(); err != nil {
 		log.Println("no .env file found, relying on already-set environment variables")
 	}
@@ -94,10 +94,9 @@ func main() {
 		lastRivalGoalTotals: make(map[int64]int),
 	}
 
-	// Render's free tier only offers Web Services (not Background Workers),
-	// which require something listening on a port. This tiny HTTP server
-	// exists purely to satisfy that requirement — the actual bot logic is
-	// the polling loop below, running concurrently in the same process.
+	// Keep-alive HTTP server — harmless on Railway (which supports true
+	// background workers), but kept so this still works unmodified if ever
+	// redeployed somewhere that requires a listening port (e.g. Render).
 	go startKeepAliveServer()
 
 	// Watches real World Cup 2026 results — for both a user's team and
@@ -202,7 +201,8 @@ func (a *App) handleMessage(userID, chatID int64, chatType, text string) {
 		a.testModeMu.Unlock()
 
 		// Seed baselines immediately for both team and rival, so /simulate
-		// and /simulaterival always have a real number to compare against.
+		// and /simulaterival always have a real number to compare against,
+		// and the poller has an accurate starting point.
 		matches, err := a.fb.GetAllMatches()
 		if err == nil {
 			if match := football.LatestScoredMatchForTeam(matches, u.Team); match != nil {
@@ -237,15 +237,10 @@ func (a *App) handleMessage(userID, chatID int64, chatType, text string) {
 			a.send(chatID, "Turn on /autohype first, then run /simulate to demo the auto-detection live.")
 			return
 		}
-		// Fire the celebration immediately — no need to wait on the poll
-		// cycle for a demo. Also nudge the tracked baseline down by one so
-		// the next real poll cycle doesn't immediately re-fire on the same
-		// result.
-		a.testModeMu.Lock()
-		if last, seen := a.lastGoalTotals[userID]; seen && last > 0 {
-			a.lastGoalTotals[userID] = last - 1
-		}
-		a.testModeMu.Unlock()
+		// Fire the celebration immediately for the demo. We deliberately do
+		// NOT touch lastGoalTotals here — it should already hold the real
+		// current total (seeded by /autohype), so the background poller
+		// won't see any "increase" and won't re-fire this same result later.
 		a.celebrateGoal(userID, chatID)
 		return
 
@@ -262,11 +257,8 @@ func (a *App) handleMessage(userID, chatID int64, chatType, text string) {
 			a.send(chatID, "Turn on /autohype first, then run /simulaterival to demo the auto-detection live.")
 			return
 		}
-		a.testModeMu.Lock()
-		if last, seen := a.lastRivalGoalTotals[userID]; seen && last > 0 {
-			a.lastRivalGoalTotals[userID] = last - 1
-		}
-		a.testModeMu.Unlock()
+		// Same reasoning as /simulate above — leave lastRivalGoalTotals
+		// untouched so the poller doesn't double-fire on the next cycle.
 		a.celebrateRivalGoal(userID, chatID)
 		return
 
@@ -453,7 +445,7 @@ func (a *App) send(chatID int64, text string) {
 func startKeepAliveServer() {
 	port := os.Getenv("PORT")
 	if port == "" {
-		port = "8080" // fallback for local runs; Render sets PORT automatically
+		port = "8080" // fallback for local runs
 	}
 
 	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
