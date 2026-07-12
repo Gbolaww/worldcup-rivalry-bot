@@ -61,14 +61,20 @@ func main() {
 			continue
 		}
 
+		if len(updates) > 0 {
+			log.Printf("received %d update(s)", len(updates))
+		}
+
 		for _, u := range updates {
 			offset = u.UpdateID + 1
 
 			if u.Message == nil {
+				log.Printf("update %d has no message, skipping", u.UpdateID)
 				continue
 			}
 			chatID := u.Message.Chat.ID
 			text := strings.TrimSpace(u.Message.Text)
+			log.Printf("handling message from chat %d: %q", chatID, text)
 
 			handleMessage(tg, gemini, eleven, store, stages, chatID, text)
 		}
@@ -162,6 +168,8 @@ func handleMessage(
 func send(tg *telegram.Client, chatID int64, text string) {
 	if err := tg.SendMessage(chatID, text); err != nil {
 		log.Printf("sendMessage error: %v", err)
+	} else {
+		log.Printf("sendMessage OK to chat %d", chatID)
 	}
 }
 
