@@ -32,7 +32,8 @@ type Update struct {
 	Message  *struct {
 		MessageID int `json:"message_id"`
 		Chat      struct {
-			ID int64 `json:"id"`
+			ID   int64  `json:"id"`
+			Type string `json:"type"` // "private", "group", "supergroup", "channel"
 		} `json:"chat"`
 		Text string `json:"text"`
 	} `json:"message"`
